@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Assessment workspace</h1>
+<p class="muted">Organize authorized programs, assets and findings. Scheduled hunting is opt-in per project and only ever touches hosts that match that project's scope rules.</p>
+<div class="warning"><strong>Authorization required:</strong> Add only programs and assets you are permitted to assess. Scope rules are matched in code before anything is scanned, but you are still responsible for reading the program policy (allowed techniques, rate limits, excluded assets).</div>
+
+<section class="grid">
+<div class="card"><h2>New project</h2>
+<form method="post" action="{{ url_for('add_project') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Project / program name</label><input name="name" maxlength="120" required>
+<label>Program policy URL (optional)</label><input name="program_url" type="url" maxlength="500" placeholder="https://…">
+<label>Scope rules (one per line)</label>
+<textarea name="authorized_scope" maxlength="5000" required placeholder="example.com&#10;*.example.com&#10;10.0.0.0/24&#10;!admin.example.com"></textarea>
+<p class="muted small"><code>example.com</code> exact host · <code>*.example.com</code> any subdomain · CIDR for IPs · <code>!host</code> excludes (always wins)</p>
+<label>Authorization notes</label><textarea name="authorization_notes" maxlength="2000" placeholder="Policy reference, dates, exclusions…"></textarea>
+<button>Create project</button></form></div>
+
+<div class="card"><h2>Record an asset</h2>
+{% if projects %}
+<form method="post" action="{{ url_for('add_asset') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Project</label><select name="project_id" required>{% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+<label>Asset</label><input name="value" maxlength="500" required placeholder="hostname, URL, IP, or other identifier">
+<label>Type</label><select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select>
+<label>Notes</label><textarea name="notes" maxlength="2000"></textarea>
+<button>Save asset</button></form>
+{% else %}<p class="empty">Create a project first.</p>{% endif %}</div>
+</section>
+
+<section class="card"><h2>Projects</h2>
+{% if projects %}{% for p in projects %}
+<article class="card"><div class="grid">
+
+<div><h3>{{ p.name }}</h3>
+{% if p.program_url %}<p><a href="{{ p.program_url }}" rel="noreferrer noopener" target="_blank">Program policy</a></p>{% endif %}
+<p><strong>Scope rules</strong></p><pre class="muted">{{ p.authorized_scope }}</pre>
+{% if p.authorization_notes %}<p class="muted">{{ p.authorization_notes }}</p>{% endif %}
+<p class="small"><a href="{{ url_for('export_project', project_id=p.id, fmt='md') }}">Export Markdown</a> · <a href="{{ url_for('export_project', project_id=p.id, fmt='json') }}">Export JSON</a></p>
+
+<h3>Scheduled hunting</h3>
+{% if p.automation_enabled %}
+<p><span class="badge in-scope">enabled</span> every {{ p.schedule_hours }}h · last run {{ p.last_run_at|ts }}{% if p.run_requested %} · run queued{% endif %}</p>
+<form class="inline" method="post" action="{{ url_for('run_now', project_id=p.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Run now</button></form>
+<form class="inline" method="post" action="{{ url_for('set_automation', project_id=p.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="disable"><button class="danger">Disable</button></form>
+{% else %}
+<p class="muted small">Off. When on, the hunter service discovers subdomains for your <code>*.</code> rules, probes live hosts and runs low-impact nuclei templates, all limited to in-scope hosts. Results arrive as <em>Unverified</em>.</p>
+<form method="post" action="{{ url_for('set_automation', project_id=p.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="enable">
+<label>Run every</label><select name="schedule_hours">{% for h in schedule_choices %}<option value="{{ h }}" {% if h == 24 %}selected{% endif %}>{{ h }} hours</option>{% endfor %}</select>
+<label class="check"><input type="checkbox" name="acknowledge" value="yes" required> <span>I have read this program's policy and it permits automated scanning at a low request rate. Hosts outside my scope rules will never be scanned.</span></label>
+<button>Enable scheduled hunting</button></form>
+{% endif %}
+{% set project_runs = runs.get(p.id, []) %}
+{% for r in project_runs %}<details><summary class="small">{{ r.started_at|ts }} · {{ r.status }}</summary><div class="runlog">{{ r.log }}</div></details>{% endfor %}
+
+<form method="post" action="{{ url_for('delete_item', table='projects', item_id=p.id) }}" data-confirm="Delete this project and its recorded assets/findings?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete project</button></form></div>
+
+<div><h3>Assets</h3>
+{% set project_assets = assets|selectattr('project_id','equalto',p.id)|list %}
+{% if project_assets %}<table><thead><tr><th>Value</th><th>Scope</th><th></th></tr></thead><tbody>
+{% for a in project_assets %}<tr><td>{{ a.value }}<br><span class="muted small">{{ a.kind }}{% if a.notes %} · {{ a.notes }}{% endif %}</span></td><td><span class="badge {{ a.scope_status }}">{{ a.scope_status }}</span></td>
+<td><form method="post" action="{{ url_for('delete_item', table='assets', item_id=a.id) }}" data-confirm="Delete this asset?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete</button></form></td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="empty">No assets recorded.</p>{% endif %}</div>
+
+<div><h3>Findings</h3>
+{% set project_findings = findings|selectattr('project_id','equalto',p.id)|list %}
+{% if project_findings %}<table><thead><tr><th>Finding</th><th>Severity / status</th><th></th></tr></thead><tbody>
+{% for f in project_findings %}<tr><td><strong>{{ f.title }}</strong>{% if f.details %}<br><span class="muted small">{{ f.details }}</span>{% endif %}</td>
+<td>{{ f.severity }}<form class="status-form" method="post" action="{{ url_for('update_finding_status', item_id=f.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="status" aria-label="Status">{% for s in statuses %}<option {% if s == f.status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><button>Set</button></form></td>
+<td><form method="post" action="{{ url_for('delete_item', table='findings', item_id=f.id) }}" data-confirm="Delete this finding?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete</button></form></td></tr>{% endfor %}
+</tbody></table>{% else %}<p class="empty">No findings recorded.</p>{% endif %}
+<details><summary>Record finding</summary>
+<form method="post" action="{{ url_for('add_finding') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="project_id" value="{{ p.id }}">
+<label>Title</label><input name="title" maxlength="180" required>
+<label>Severity</label><select name="severity">{% for s in severities %}<option>{{ s }}</option>{% endfor %}</select>
+<label>Status</label><select name="status">{% for s in statuses %}<option {% if s == 'Open' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+<label>Details / evidence notes</label><textarea name="details" maxlength="5000"></textarea>
+<button>Save finding</button></form></details></div>
+
+</div></article>
+{% endfor %}{% else %}<p class="empty">No projects yet. Create one to start organizing an authorized assessment.</p>{% endif %}
+</section>
+{% endblock %}
