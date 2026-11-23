@@ -45,6 +45,43 @@ services:
     command: ["update"]
     restart: "no"
 
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["production"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bountydeck}
+      POSTGRES_USER: ${POSTGRES_USER:-bountydeck}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-bountydeck} -d $${POSTGRES_DB:-bountydeck}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["production"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
+    volumes:
+      - redis-data:/data
+
+  worker:
+    build: ./worker
+    profiles: ["production"]
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bountydeck}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bountydeck}
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -70,3 +107,5 @@ volumes:
   bountydeck-tools:
   tools-cache:
   tools-config:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,38 @@
+openapi: 3.1.0
+info:
+  title: BountyDeck API
+  version: 0.2.0
+  description: Scope-controlled bug-bounty assessment management API.
+servers:
+  - url: http://localhost:8000
+security:
+  - CookieAuth: []
+components:
+  securitySchemes:
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+paths:
+  /login:
+    post:
+      security: []
+      summary: Authenticate the single administrator
+      responses:
+        "200": {description: Authenticated}
+        "401": {description: Invalid password}
+  /projects:
+    post:
+      summary: Create an assessment project with authorized scope
+      responses:
+        "302": {description: Project created}
+  /assets:
+    post:
+      summary: Record a manually verified asset
+      responses:
+        "302": {description: Asset recorded}
+  /findings:
+    post:
+      summary: Record a finding
+      responses:
+        "302": {description: Finding recorded}
