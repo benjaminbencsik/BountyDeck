@@ -34,7 +34,7 @@
 {% if p.program_url %}<p><a href="{{ p.program_url }}" rel="noreferrer noopener" target="_blank">Program policy</a></p>{% endif %}
 <p><strong>Scope rules</strong></p><pre class="muted">{{ p.authorized_scope }}</pre>
 {% if p.authorization_notes %}<p class="muted">{{ p.authorization_notes }}</p>{% endif %}
-<p class="small"><a href="{{ url_for('export_project', project_id=p.id, fmt='md') }}">Export Markdown</a> · <a href="{{ url_for('export_project', project_id=p.id, fmt='json') }}">Export JSON</a></p>
+<p class="small"><a href="{{ url_for('export_project', project_id=p.id, fmt='md') }}">Export Markdown</a> · <a href="{{ url_for('export_project', project_id=p.id, fmt='md', verified=1) }}">Verified-only report</a> · <a href="{{ url_for('export_project', project_id=p.id, fmt='json') }}">Export JSON</a></p>
 
 <h3>Scheduled hunting</h3>
 {% if p.automation_enabled %}
@@ -64,7 +64,7 @@
 {% set project_findings = findings|selectattr('project_id','equalto',p.id)|list %}
 {% if project_findings %}<table><thead><tr><th>Finding</th><th>Severity / status</th><th></th></tr></thead><tbody>
 {% for f in project_findings %}<tr><td><strong>{{ f.title }}</strong>{% if f.details %}<br><span class="muted small">{{ f.details }}</span>{% endif %}</td>
-<td>{{ f.severity }}<form class="status-form" method="post" action="{{ url_for('update_finding_status', item_id=f.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="status" aria-label="Status">{% for s in statuses %}<option {% if s == f.status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><button>Set</button></form></td>
+<td>{{ f.severity }}<form class="status-form" method="post" action="{{ url_for('update_finding_status', item_id=f.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="status" aria-label="Status">{% for s in statuses %}<option {% if s == f.status %}selected{% endif %}>{{ s }}</option>{% endfor %}</select><input name="verification_notes" maxlength="2000" placeholder="How confirmed? (required for Verified / False positive)" aria-label="Verification note"><button>Set</button></form>{% if f.verification_notes %}<span class="muted small">Note: {{ f.verification_notes }}</span>{% endif %}</td>
 <td><form method="post" action="{{ url_for('delete_item', table='findings', item_id=f.id) }}" data-confirm="Delete this finding?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete</button></form></td></tr>{% endfor %}
 </tbody></table>{% else %}<p class="empty">No findings recorded.</p>{% endif %}
 <details><summary>Record finding</summary>

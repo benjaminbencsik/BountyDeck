@@ -43,7 +43,11 @@ def test_asset_scope_badge_and_warning(client):
 def test_finding_status_update_and_export(client):
     create_project(client)
     client.post("/findings", project_id="1", title="XSS | reflected", severity="High", status="Open", details="d")
-    assert client.post("/findings/1/status", status="False positive").status_code == 302
+    # Verified / False positive need an explanation of how the result was confirmed.
+    assert client.post("/findings/1/status", status="False positive").status_code == 400
+    assert client.post("/findings/1/status", status="False positive", verification_notes="short").status_code == 400
+    assert client.post("/findings/1/status", status="False positive",
+                       verification_notes="Replayed request manually; payload is HTML-encoded in response.").status_code == 302
     assert client.post("/findings/1/status", status="Bogus").status_code == 400
     data = json.loads(client.c.get("/projects/1/export.json").get_data(as_text=True))
     assert data["findings"][0]["status"] == "False positive"
@@ -78,3 +82,15 @@ def test_update_check_reports_newer_commit(client, app_module, monkeypatch):
     assert "Update available" in page and "./update.sh" in page
     monkeypatch.setattr(app_module, "VERSION", "a" * 40)
     assert "up to date" in client.post("/update/check").get_data(as_text=True)
+
+
+def test_verified_only_report(client):
+    create_project(client)
+    client.post("/findings", project_id="1", title="Unconfirmed thing", severity="Low", status="Unverified", details="")
+    client.post("/findings", project_id="1", title="Real thing", severity="High", status="Open", details="")
+    client.post("/findings/2/status", status="Verified", verification_notes="Reproduced with curl, see request 12.")
+    full = client.c.get("/projects/1/export.md").get_data(as_text=True)
+    only = client.c.get("/projects/1/export.md?verified=1").get_data(as_text=True)
+    assert "Unconfirmed thing" in full and "Real thing" in full
+    assert "Real thing" in only and "Unconfirmed thing" not in only
+    assert "Reproduced with curl" in only

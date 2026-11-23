@@ -71,3 +71,4 @@ th,td{
 .check{display:flex;gap:8px;align-items:flex-start;color:var(--text);margin:12px 0}.check input{width:auto;margin-top:4px}
 footer{color:var(--muted);font-size:12px;text-align:center;margin:40px 0 20px}
 pre{white-space:pre-wrap;word-break:break-word}
+.status-form{flex-wrap:wrap}.status-form input{flex:1 1 180px;padding:4px}

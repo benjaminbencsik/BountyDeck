@@ -17,7 +17,8 @@ from flask import (Flask, Response, abort, flash, redirect, render_template, req
                    session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from db import ASSET_KINDS, SEVERITIES, STATUSES, connect, init_db
+from db import (ASSET_KINDS, NOTE_REQUIRED_STATUSES, REPORTABLE_STATUSES, SEVERITIES, STATUSES,
+                connect, init_db)
 from scope import OUT_OF_SCOPE, check_scope
 
 ADMIN_PASSWORD = os.environ.get("BOUNTYDECK_ADMIN_PASSWORD", "")
@@ -249,10 +250,16 @@ def add_finding():
 def update_finding_status(item_id: int):
     require_csrf()
     status = field("status", 20, True)
+    notes = field("verification_notes", 2000)
     if status not in STATUSES:
         abort(400, "Invalid status.")
+    if status in NOTE_REQUIRED_STATUSES and len(notes) < 10:
+        abort(400, f"Add a note (10+ characters) explaining how this was confirmed before marking it {status}.")
     with connect() as db:
-        cur = db.execute("UPDATE findings SET status=? WHERE id=?", (status, item_id))
+        if notes:
+            cur = db.execute("UPDATE findings SET status=?, verification_notes=? WHERE id=?", (status, notes, item_id))
+        else:
+            cur = db.execute("UPDATE findings SET status=? WHERE id=?", (status, item_id))
         if cur.rowcount == 0:
             abort(404)
     return redirect(url_for("index"))
@@ -331,8 +338,10 @@ def project_export(project_id: int) -> dict[str, Any]:
     }
 
 
-def render_markdown(data: dict[str, Any]) -> str:
+def render_markdown(data: dict[str, Any], verified_only: bool = False) -> str:
     p = data["project"]
+    if verified_only:
+        data = dict(data, findings=[f for f in data["findings"] if f["status"] in REPORTABLE_STATUSES])
     lines = [f"# {p['name']}", ""]
     if p["program_url"]:
         lines += [f"Program policy: {p['program_url']}", ""]
@@ -353,6 +362,8 @@ def render_markdown(data: dict[str, Any]) -> str:
             lines += [f"### {f['title']}", "", f"- Severity: {f['severity']}", f"- Status: {f['status']}", ""]
             if f["details"]:
                 lines += [f["details"], ""]
+            if f.get("verification_notes"):
+                lines += ["**Verification:**", "", f["verification_notes"], ""]
     else:
         lines.append("_None recorded._")
     return "\n".join(lines) + "\n"
@@ -366,7 +377,7 @@ def export_project(project_id: int, fmt: str):
     if fmt == "json":
         body, mime = json.dumps(data, indent=2), "application/json"
     elif fmt == "md":
-        body, mime = render_markdown(data), "text/markdown"
+        body, mime = render_markdown(data, request.args.get("verified") == "1"), "text/markdown"
     else:
         abort(404)
     return Response(body, mimetype=mime,

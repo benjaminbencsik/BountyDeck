@@ -9,6 +9,9 @@ DB_PATH = Path(os.environ.get("BOUNTYDECK_DB", "/data/bountydeck.sqlite3"))
 
 ASSET_KINDS = ("Hostname", "URL", "IP address", "Other")
 SEVERITIES = ("Informational", "Low", "Medium", "High", "Critical")
+# Marking a result with one of these requires a note on how it was confirmed or ruled out.
+NOTE_REQUIRED_STATUSES = ("Verified", "False positive")
+REPORTABLE_STATUSES = ("Verified", "Reported", "Resolved")
 STATUSES = ("Unverified", "Open", "Triaged", "Verified", "Reported", "Resolved", "Informative", "False positive")
 
 SCHEMA = """
@@ -64,6 +67,7 @@ MIGRATIONS = (
     ("projects", "last_run_at", "REAL"),
     ("projects", "run_requested", "INTEGER NOT NULL DEFAULT 0"),
     ("findings", "dedupe_key", "TEXT"),
+    ("findings", "verification_notes", "TEXT NOT NULL DEFAULT ''"),
 )
 
 

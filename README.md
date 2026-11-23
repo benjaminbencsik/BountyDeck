@@ -7,7 +7,7 @@ BountyDeck is a self-hostable workspace for authorized bug-bounty program, asset
 - Programs, scope rules, assets and findings in one place, with Markdown/JSON export per project.
 - **Scope matching in code.** Rules like `example.com`, `*.example.com`, CIDR ranges and `!excluded.example.com` (exclusions always win). Recorded assets show an in-scope / out-of-scope badge.
 - **Scheduled hunting** (opt-in per project): while you are away, a separate `hunter` service discovers subdomains for your wildcard rules (subfinder), probes live hosts (httpx) and runs low-impact nuclei templates, then drops the results into your workspace as **Unverified** findings. New in-scope assets and findings can ping a Discord/Slack webhook.
-- Finding workflow statuses including *Unverified*, *Verified* and *False positive*.
+- Finding workflow statuses including *Unverified*, *Verified* and *False positive*. Marking a finding Verified or False positive requires a note on how you confirmed it, and a **verified-only report** export leaves everything else out.
 - Login lockout after repeated failures, strict CSP, CSRF protection.
 - In-app **Updates** page that checks GitHub for a newer commit; `./update.sh` applies it in one command.
 
@@ -28,6 +28,8 @@ BountyDeck distinguishes between a scope record and authorization to test. The s
 - A VPS with inbound ports 80/443 and DNS for HTTPS deployment
 
 ## First-time setup
+
+The quick way: `./setup.sh` checks for Docker, creates `.env` with fresh random secrets (it prints the admin password once), then builds and starts everything. Go, Python and the scanners are installed inside the Docker images, so Docker is the only host requirement. The manual steps are below.
 
 ```sh
 cp .env.example .env
