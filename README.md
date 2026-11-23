@@ -1,67 +1,98 @@
 # BountyDeck
 
-BountyDeck is a self-hostable workspace for organizing authorized bug-bounty programs, manually recorded assets, and findings. It currently does **not** probe networks, run scans, or install third-party reconnaissance tools. Scope text is a human record, not a technical authorization check.
+BountyDeck is a self-hostable workspace for authorized bug-bounty program, asset, and finding management. It runs locally or behind HTTPS on a VPS.
+
+## Safety model
+
+BountyDeck distinguishes between a scope record and authorization to scan. It does not convert a domain string or a checkbox into permission. Before running an intrusive tool, retain written authorization and follow the target owner's rules. Keep tools disabled until a project-specific review is complete. This repository provides installation/update tooling, not unrestricted one-click target scanning.
 
 ## Requirements
 
-- Docker Engine and the Docker Compose plugin
-- For VPS deployment: a Linux VPS, a DNS name pointing to it, and inbound TCP ports 80/443 available
+- Docker Engine and Docker Compose
+- Linux, macOS, or Windows host with Docker
+- A VPS with inbound ports 80/443 and DNS for HTTPS deployment
 
-No host-side Python, database, or scanner installation is needed; the application image installs only its Python web-app dependencies during the first build.
-
-## Run locally
+## First-time setup
 
 ```sh
 cp .env.example .env
-# Replace both secrets; use a unique password and a random secret key.
-# Example: openssl rand -hex 32
+openssl rand -hex 32  # use one value for BOUNTYDECK_SECRET_KEY
+# Set a strong BOUNTYDECK_ADMIN_PASSWORD in .env
+
+# Build and install the web application.
 docker compose up --build -d
+
+# Initial tool installation and Nuclei template download.
+docker compose --profile tools run --rm tools
 ```
 
-Open <http://localhost:8000>. To stop it, run `docker compose down`; your data remains in the `bountydeck-data` volume. To remove the data too, use `docker compose down -v` (destructive).
+Open `http://localhost:8000` locally. The tools volume persists under `bountydeck-tools` and is mounted read-only in the web app. Stop with `docker compose down`.
 
-## Deploy on a VPS
+## VPS deployment
 
-1. Install Docker Engine and its Compose plugin using the official instructions for your Linux distribution.
-2. Point a DNS A/AAAA record for your domain at the VPS. Allow inbound ports 80 and 443 in the host firewall and provider firewall.
-3. Copy the repository to the VPS and create configuration:
+Point DNS at the server, open 80/443, copy this repository, and configure `.env`:
 
-   ```sh
-   cp .env.example .env
-   ```
+```dotenv
+BOUNTYDECK_ADMIN_PASSWORD=<strong unique password>
+BOUNTYDECK_SECRET_KEY=<openssl rand -hex 32>
+BOUNTYDECK_HTTPS=1
+BOUNTYDECK_DOMAIN=bounty.example.com
+```
 
-4. Edit `.env`: set a unique long admin password, set `BOUNTYDECK_SECRET_KEY` to output from `openssl rand -hex 32`, set `BOUNTYDECK_HTTPS=1`, and set `BOUNTYDECK_DOMAIN` to the DNS name.
-5. Start the app and Caddy reverse proxy:
+Start application and HTTPS proxy:
 
-   ```sh
-   docker compose --profile vps up --build -d
-   ```
+```sh
+docker compose --profile vps up --build -d
+docker compose --profile tools run --rm tools
+```
 
-Caddy obtains and renews HTTPS certificates automatically. Sign in at `https://your-domain`. Do not expose port 8000 publicly: Compose binds it to loopback only. Back up the Docker volume regularly and keep the `.env` file private (`chmod 600 .env`).
+Caddy requests and renews TLS certificates automatically.
 
-## Updating
+## Tool suite
 
-Fetch the version you intend to deploy, then rebuild and restart:
+The initial Docker tool image includes these scanners and helpers:
+
+- Subfinder, Amass, Assetfinder, DNSx, dig, and Whois
+- HTTPx and Katana
+- Naabu and Nmap
+- Gau and Waybackurls
+- FFUF and Dirsearch
+- Nuclei plus downloaded templates
+- Gowitness
+
+See `tools/tool-registry.json` for categories and risk labels. The image pins reviewed tool versions for reproducible first installs. Tool binaries and templates are kept in the persistent Docker volume `bountydeck-tools`; the web container cannot alter or execute them because the mount is read-only.
+
+## Download or update tools later
+
+```sh
+# Reinstall or initialize tools after a fresh Docker volume.
+docker compose --profile tools run --rm tools
+
+# Update Go tools to latest, upgrade Dirsearch, and refresh Nuclei templates.
+docker compose --profile tools run --rm tools-update update
+
+# Display a status shell or registry.
+docker compose --profile tools run --rm tools shell
+docker compose --profile tools run --rm tools status
+```
+
+Updates are intentionally run explicitly. Production deployments should test updated binaries and templates before use. Rebuilding `Dockerfile.tools` also changes its pinned tool versions on the next initial-install run.
+
+## Application updates
 
 ```sh
 git pull
 docker compose --profile vps up --build -d
+# Back up bountydeck-data before a major upgrade.
+docker compose ps
 ```
 
-For local use, omit `--profile vps`. Database schema changes are applied on startup; back up the data volume before upgrades. Pin reviewed release tags or commit SHAs in production rather than deploying unreviewed changes from a moving branch.
+## Security and operations
 
-## Current features
-
-- Password-protected single-admin workspace
-- Project/program records with policy URL, authorized scope text, and authorization notes
-- Manual asset inventory and finding tracking
-- Persistent SQLite storage, Docker-based local and VPS deployment, HTTPS reverse proxy option
-- CSRF-protected forms, secure headers, non-root container user, and loopback-only app port
-
-## Tooling status and safety
-
-This starter does not provide the requested scanner suite or a tool installer/updater. Adding turnkey installers and automated execution for tools such as Nmap, ffuf, or Nuclei could enable scanning systems without authorization. The current app therefore stays a project and notes manager; it will not treat a user-entered scope list as proof of permission. Use security tools only under applicable written authorization and follow their official installation, update, and scope guidance.
-
-## Data and security notes
-
-The app has a single shared administrator account, not per-user accounts or team roles. Keep it behind HTTPS on a VPS, use strong unique secrets, restrict server access, and maintain encrypted backups. Do not store sensitive credentials or unredacted secrets as finding evidence. SQLite and the volume are intended for a small personal workspace; this is not yet a hardened multi-user production platform.
+- The app is protected with a single strong administrator password.
+- SQLite data persists in `bountydeck-data`.
+- Port 8000 is bound to `127.0.0.1`; the VPS path uses Caddy.
+- Back up the volumes and `.env` securely.
+- Restrict Docker host access, because Docker socket or container privileges can bypass ordinary user permissions.
+- The tools container is not exposed to the internet or the web UI.
+- Review third-party licenses and source integrity before production use.
