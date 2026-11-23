@@ -1,35 +1,33 @@
-# BountyDeck roadmap status
+# BountyDeck implementation status
 
-## Added foundations
+## Available
 
-- Team and API credential primitives
-- Role hierarchy for viewer, operator, approver, and admin
-- Password hashing with PBKDF2-SHA256
-- API token digest storage
-- Project membership schema
-- Authorization, scan-job, raw-result, and normalized-finding schemas
-- Scope-validated dry-run planning
-- Passive/light/intrusive profile separation
-- Intrusive execution block
-- Queue worker that refuses network execution until a future approval implementation enables it
-- Unit tests for passive planning and out-of-scope rejection
+- Local and VPS Docker deployment
+- Tool image with pinned initial installs and explicit updates
+- Scope parser for hosts, wildcard hosts, CIDR, and exclusions
+- Public DNS resolution guardrails
+- Team/auth primitives and role hierarchy
+- Authorization, job lifecycle, audit, and normalized findings schemas
+- Passive/light/intrusive profile planning
+- Intrusive execution disabled by default
+- Catalog of 15 manual bug-testing categories
+- Test-plan and CSV reporting foundations
+- PostgreSQL migration SQL under `migrations/`
+- Redis/RQ production worker scaffold
+- OpenAPI and Compose foundations
 
-## Before public execution
+## Not yet enabled
 
-1. Replace SQLite with PostgreSQL migrations.
-2. Integrate team accounts into every web route.
-3. Store and approve immutable authorization records.
-4. Validate DNS resolution and redirects before workers receive targets.
-5. Add a second approver for intrusive jobs.
-6. Implement isolated network worker containers and command allowlists.
-7. Store raw output and normalized evidence.
-8. Add scheduling and notification services.
+- Live web-route integration for team accounts and scanner jobs
+- PostgreSQL application runtime
+- Live HTTP or DNS worker execution
+- 2FA UI and API authentication middleware
+- Scheduler and notifications
+- PDF/HTML report rendering
+- Screenshots and evidence object storage
+- Metrics and OpenTelemetry
+- Kubernetes manifests
 
-## Test
+## Execution gate
 
-```sh
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-pytest -q
-```
+No command is executed by the web application or worker in this repository. Enable execution only after scope resolution, DNS validation, authorization approval, dry-run review, rate limits, and destination allowlists are integrated and tested.
