@@ -75,12 +75,13 @@ services:
     restart: unless-stopped
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      DATABASE_URL: postgresql://${POSTGRES_USER:-bountydeck}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bountydeck}
+      BOUNTYDECK_DB: /data/bountydeck.sqlite3
+    volumes:
+      - bountydeck-data:/data
+      - bountydeck-tools:/opt/bountydeck/tools:ro
     depends_on:
       redis:
         condition: service_started
-      postgres:
-        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine

@@ -1,31 +1,31 @@
-# BountyDeck implementation status
+# BountyDeck roadmap status
 
-## Implemented foundations
+## Added foundations
 
-- Docker deployment for local hosts and VPS reverse-proxy deployment
-- Persistent SQLite workspace and password authentication
-- Project, asset, finding, tool registry, and audit foundations
-- Pinned tool installation and explicit update mode
-- Strict domain, wildcard-domain, CIDR, and exclusion parsing
-- Unit tests for scope matching
-- Redis/RQ worker and PostgreSQL infrastructure templates
-- OpenAPI starter specification
-- Read-only tool volume in the web container
+- Team and API credential primitives
+- Role hierarchy for viewer, operator, approver, and admin
+- Password hashing with PBKDF2-SHA256
+- API token digest storage
+- Project membership schema
+- Authorization, scan-job, raw-result, and normalized-finding schemas
+- Scope-validated dry-run planning
+- Passive/light/intrusive profile separation
+- Intrusive execution block
+- Queue worker that refuses network execution until a future approval implementation enables it
+- Unit tests for passive planning and out-of-scope rejection
 
-## Safety gates before execution
+## Before public execution
 
-No endpoint in this repository automatically executes a scanner. Before enabling execution:
+1. Replace SQLite with PostgreSQL migrations.
+2. Integrate team accounts into every web route.
+3. Store and approve immutable authorization records.
+4. Validate DNS resolution and redirects before workers receive targets.
+5. Add a second approver for intrusive jobs.
+6. Implement isolated network worker containers and command allowlists.
+7. Store raw output and normalized evidence.
+8. Add scheduling and notification services.
 
-1. Create an immutable project authorization record.
-2. Parse scope into exact, wildcard, CIDR, and exclusion rules.
-3. Validate every resolved address and redirect destination.
-4. Require the operator to acknowledge authorization and select a documented profile.
-5. Preview the exact command and target list as a dry run.
-6. Send only approved jobs to isolated workers.
-7. Record tool version, command, raw output, and audit event.
-8. Enforce timeouts, rate limits, cancellation, and destination allowlists.
-
-## Test locally
+## Test
 
 ```sh
 python -m venv .venv
