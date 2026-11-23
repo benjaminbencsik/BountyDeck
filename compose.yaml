@@ -1,0 +1,72 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      BOUNTYDECK_ADMIN_PASSWORD: ${BOUNTYDECK_ADMIN_PASSWORD:?Set a unique admin password in .env}
+      BOUNTYDECK_SECRET_KEY: ${BOUNTYDECK_SECRET_KEY:?Set a random secret key in .env}
+      BOUNTYDECK_DB: /data/bountydeck.sqlite3
+      BOUNTYDECK_HTTPS: ${BOUNTYDECK_HTTPS:-0}
+    volumes:
+      - bountydeck-data:/data
+      - bountydeck-tools:/opt/bountydeck/tools:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  tools:
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    profiles: ["tools"]
+    volumes:
+      - bountydeck-tools:/opt/bountydeck/tools
+      - tools-cache:/root/.cache
+      - tools-config:/root/.config
+    entrypoint: ["/usr/local/bin/bountydeck-tools"]
+    command: ["install"]
+    restart: "no"
+
+  tools-update:
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    profiles: ["tools"]
+    volumes:
+      - bountydeck-tools:/opt/bountydeck/tools
+      - tools-cache:/root/.cache
+      - tools-config:/root/.config
+    entrypoint: ["/usr/local/bin/bountydeck-tools"]
+    command: ["update"]
+    restart: "no"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ["vps"]
+    environment:
+      BOUNTYDECK_DOMAIN: ${BOUNTYDECK_DOMAIN:?Set your public VPS domain in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  bountydeck-data:
+  caddy-data:
+  caddy-config:
+  bountydeck-tools:
+  tools-cache:
+  tools-config:

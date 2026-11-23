@@ -1,0 +1,18 @@
+{
+  "subfinder": {"category":"subdomain discovery","source":"github.com/projectdiscovery/subfinder","risk":"passive-active"},
+  "dnsx": {"category":"DNS discovery","source":"github.com/projectdiscovery/dnsx","risk":"network"},
+  "httpx": {"category":"HTTP probing","source":"github.com/projectdiscovery/httpx","risk":"network"},
+  "naabu": {"category":"port discovery","source":"github.com/projectdiscovery/naabu","risk":"active"},
+  "nmap": {"category":"port and service discovery","source":"Debian packages","risk":"active"},
+  "amass": {"category":"asset discovery","source":"github.com/owasp-amass/amass","risk":"passive-active"},
+  "assetfinder": {"category":"subdomain discovery","source":"github.com/tomnomnom/assetfinder","risk":"passive"},
+  "katana": {"category":"web crawling","source":"github.com/projectdiscovery/katana","risk":"network"},
+  "gau": {"category":"historical URL discovery","source":"github.com/lc/gau","risk":"passive"},
+  "waybackurls": {"category":"historical URL discovery","source":"github.com/tomnomnom/waybackurls","risk":"passive"},
+  "ffuf": {"category":"web fuzzing","source":"Debian packages","risk":"intrusive"},
+  "dirsearch": {"category":"path discovery","source":"PyPI: dirsearch","risk":"active"},
+  "nuclei": {"category":"template-based vulnerability scanning","source":"github.com/projectdiscovery/nuclei","risk":"active-intrusive"},
+  "gowitness": {"category":"screenshots","source":"github.com/sensepost/gowitness","risk":"network"},
+  "whois": {"category":"registration metadata","source":"Debian packages","risk":"passive"},
+  "dig": {"category":"DNS metadata","source":"Debian bind9-dnsutils","risk":"network"}
+}
