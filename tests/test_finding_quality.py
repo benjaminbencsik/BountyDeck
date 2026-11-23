@@ -15,7 +15,7 @@ def test_complete_finding_is_normalized():
         cvss="8.1",
     )
     assert finding["cwe"] == "CWE-79"
-    assert len(finding["fingerprint") == 64
+    assert len(finding["fingerprint"]) == 64
 
 
 def test_incomplete_finding_is_rejected():
