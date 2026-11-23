@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 from scope import parse_scope, target_allowed
@@ -15,6 +13,7 @@ def test_wildcard_and_exclusion():
     rules = parse_scope("*.example.com\n!excluded.example.com")
     assert target_allowed("api.example.com", rules)
     assert not target_allowed("excluded.example.com", rules)
+    assert not target_allowed("example.com", rules)
     assert not target_allowed("example.net", rules)
 
 
@@ -30,7 +29,7 @@ def test_requires_included_scope():
         parse_scope("!example.com")
 
 
-def test_rejects_invalid_scheme_and_localhost():
+def test_rejects_urls_and_localhost():
     with pytest.raises(ValueError):
         parse_scope("http://example.com")
     with pytest.raises(ValueError):

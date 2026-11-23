@@ -1,41 +1,31 @@
 # BountyDeck implementation status
 
-## Implemented
+## Implemented foundations
 
 - Docker deployment for local hosts and VPS reverse-proxy deployment
-- Persistent SQLite workspace, password login, CSRF protection, security headers
-- Project, asset, finding, and tool registry records
-- Pinned initial tool installation and explicit update mode
-- Strict domain/wildcard/CIDR scope parser and exclusion rules
+- Persistent SQLite workspace and password authentication
+- Project, asset, finding, tool registry, and audit foundations
+- Pinned tool installation and explicit update mode
+- Strict domain, wildcard-domain, CIDR, and exclusion parsing
 - Unit tests for scope matching
-- Redis/RQ production worker and PostgreSQL infrastructure templates
+- Redis/RQ worker and PostgreSQL infrastructure templates
 - OpenAPI starter specification
-- Read-only tool volume mount in the web container
+- Read-only tool volume in the web container
 
-## Deliberately not yet enabled
+## Safety gates before execution
 
-- Automated network execution from the web UI
-- Intrusive or active scanners
-- Team users and roles
-- 2FA and API-key authentication
-- PostgreSQL-backed application storage
-- Browser screenshot storage
-- Scheduling UI
-- Result normalization pipelines
-- PDF/JSON/CSV reporting
+No endpoint in this repository automatically executes a scanner. Before enabling execution:
 
-## Required before scanner execution
+1. Create an immutable project authorization record.
+2. Parse scope into exact, wildcard, CIDR, and exclusion rules.
+3. Validate every resolved address and redirect destination.
+4. Require the operator to acknowledge authorization and select a documented profile.
+5. Preview the exact command and target list as a dry run.
+6. Send only approved jobs to isolated workers.
+7. Record tool version, command, raw output, and audit event.
+8. Enforce timeouts, rate limits, cancellation, and destination allowlists.
 
-1. Import or create scope and get sign-off approval.
-2. Convert scope into immutable rules.
-3. Validate every target against exact, wildcard, CIDR, and exclusion rules.
-4. Require a scan profile and confirmation of written authorization.
-5. Preview commands and targets in a dry-run view.
-6. Send approved jobs through Redis to isolated workers.
-7. Record raw output and immutable audit events.
-8. Enforce timeouts, rate limits, destination allowlists, and cancellation.
-
-## Run scope tests
+## Test locally
 
 ```sh
 python -m venv .venv

@@ -3,9 +3,10 @@ from __future__ import annotations
 import ipaddress
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
-_HOST_RE = re.compile(r"^(?:\*\.)?(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$")
+_HOST_RE = re.compile(
+    r"^(?:\*\.)?(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$"
+)
 
 
 @dataclass(frozen=True)
@@ -18,10 +19,7 @@ class ScopeRule:
 def normalize_target(raw: str) -> str:
     value = raw.strip().lower().rstrip(".")
     if "://" in value:
-        parts = urlsplit(value)
-        value = parts.hostname or ""
-    if value.startswith("*."):
-        value = value[2:] if False else value
+        raise ValueError("Scope entries must be hosts, wildcard hosts, or CIDR ranges—not URLs")
     return value
 
 
@@ -34,25 +32,37 @@ def parse_scope(lines: str) -> list[ScopeRule]:
         excluded = raw.startswith("!")
         if excluded:
             raw = raw[1:].strip()
-        raw = normalize_target(raw)
         if not raw:
             raise ValueError("Scope entry may not be empty")
+
+        raw = normalize_target(raw)
         try:
             network = ipaddress.ip_network(raw, strict=False)
             rules.append(ScopeRule("cidr", str(network), excluded))
+            continue
         except ValueError:
-            if _HOST_RE.match(raw) or re.fullmatch(r"\*\.[a-zA-Z0-9.-]+", raw):
-                kind = "wildcard_host" if raw.startswith("*." ) else "host"
-                rules.append(ScopeRule(kind, raw, excluded))
-            else:
-                raise ValueError(f"Invalid scope entry: {raw}")
-    if not any(not r.excluded for r in rules):
+            pass
+
+        if re.fullmatch(r"\*\.[a-zA-Z0-9.-]+", raw):
+            suffix = raw[2:].lower()
+            if not _HOST_RE.match(suffix):
+                raise ValueError(f"Invalid wildcard scope entry: {raw}")
+            rules.append(ScopeRule("wildcard_host", raw, excluded))
+        elif _HOST_RE.match(raw):
+            rules.append(ScopeRule("host", raw, excluded))
+        else:
+            raise ValueError(f"Invalid scope entry: {raw}")
+
+    if not rules:
+        raise ValueError("Scope may not be empty")
+    if not any(not rule.excluded for rule in rules):
         raise ValueError("Scope must contain at least one included entry")
     return rules
 
 
 def target_allowed(raw: str, rules: list[ScopeRule]) -> bool:
     value = normalize_target(raw)
+
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
@@ -67,7 +77,8 @@ def target_allowed(raw: str, rules: list[ScopeRule]) -> bool:
             matched = value == rule.value
         elif rule.kind == "wildcard_host":
             suffix = rule.value[2:].lower()
-            matched = value == suffix or value.endswith("." + suffix)
+            matched = value.endswith("." + suffix)
+
         if matched:
             if rule.excluded:
                 return False
