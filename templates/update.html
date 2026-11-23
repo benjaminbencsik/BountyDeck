@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Updates</h1>
+<section class="card">
+<p>Installed build: <code>{{ version }}</code></p>
+<p class="muted">Checks <code>{{ repo }}</code> ({{ branch }}) on GitHub for a newer commit. Applying an update is deliberately not done from inside the web container, because that would require giving it control of Docker.</p>
+<form method="post" action="{{ url_for('update_check') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Check for updates</button></form>
+{% if result %}
+  {% if not result.ok %}<p role="alert">{{ result.error }}</p>
+  {% elif result.dev_build %}<p>This is a development build with no version stamp. Latest on GitHub: <code>{{ result.latest.sha[:8] }}</code> — {{ result.latest.message }}</p>
+  {% elif result.up_to_date %}<p>You are up to date (<code>{{ result.latest.sha[:8] }}</code>).</p>
+  {% else %}<p><strong>Update available:</strong> <code>{{ result.latest.sha[:8] }}</code> — {{ result.latest.message }} ({{ result.latest.date }})</p>
+  <p>On the host, in the BountyDeck folder, run one command:</p><pre>./update.sh</pre>
+  <p class="muted">It pulls the latest code, rebuilds, restarts, and keeps your data volume. Back up <code>bountydeck-data</code> before major upgrades.</p>{% endif %}
+{% endif %}
+</section>
+{% endblock %}

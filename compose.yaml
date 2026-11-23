@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     restart: unless-stopped
     environment:
       BOUNTYDECK_ADMIN_PASSWORD: ${BOUNTYDECK_ADMIN_PASSWORD:?Set a unique admin password in .env}
@@ -45,6 +48,28 @@ services:
     command: ["update"]
     restart: "no"
 
+  # Scheduled, scope-enforced hunting. Start with: docker compose --profile hunter up -d
+  # Only projects you enable automation on (and acknowledge) are ever touched.
+  hunter:
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    profiles: ["hunter"]
+    restart: unless-stopped
+    user: "10001:10001"
+    working_dir: /app
+    entrypoint: ["python3", "/app/hunter.py"]
+    environment:
+      BOUNTYDECK_DB: /data/bountydeck.sqlite3
+      HOME: /home/bountydeck
+      BOUNTYDECK_HUNT_RATE: ${BOUNTYDECK_HUNT_RATE:-10}
+      BOUNTYDECK_WEBHOOK_URL: ${BOUNTYDECK_WEBHOOK_URL:-}
+    volumes:
+      - bountydeck-data:/data
+      - hunter-home:/home/bountydeck
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -70,3 +95,4 @@ volumes:
   bountydeck-tools:
   tools-cache:
   tools-config:
+  hunter-home:

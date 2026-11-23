@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
+import re
 import secrets
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 from functools import wraps
-from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from flask import Flask, abort, redirect, render_template_string, request, session, url_for
+from flask import (Flask, Response, abort, flash, redirect, render_template, request,
+                   session, url_for)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-APP_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("BOUNTYDECK_DB", "/data/bountydeck.sqlite3"))
+from db import (ASSET_KINDS, NOTE_REQUIRED_STATUSES, REPORTABLE_STATUSES, SEVERITIES, STATUSES,
+                connect, init_db)
+from scope import OUT_OF_SCOPE, check_scope
+
 ADMIN_PASSWORD = os.environ.get("BOUNTYDECK_ADMIN_PASSWORD", "")
 SECRET_KEY = os.environ.get("BOUNTYDECK_SECRET_KEY", "")
+VERSION = os.environ.get("BOUNTYDECK_VERSION", "dev")
+UPDATE_REPO = os.environ.get("BOUNTYDECK_REPO", "benjaminbencsik/BountyDeck")
+UPDATE_BRANCH = os.environ.get("BOUNTYDECK_BRANCH", "main")
+
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
+
 
 if len(ADMIN_PASSWORD) < 14:
     raise RuntimeError("Set BOUNTYDECK_ADMIN_PASSWORD to a unique password of at least 14 characters.")
@@ -33,47 +48,10 @@ app.config.update(
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 
-def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db() -> None:
-    with connect() as db:
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS projects (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                program_url TEXT NOT NULL DEFAULT '',
-                authorized_scope TEXT NOT NULL,
-                authorization_notes TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS assets (
-                id INTEGER PRIMARY KEY,
-                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                value TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                notes TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS findings (
-                id INTEGER PRIMARY KEY,
-                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                title TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Open',
-                details TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-
 init_db()
 
+
+# --------------------------------------------------------------------------- helpers
 
 def csrf_token() -> str:
     token = session.get("csrf_token")
@@ -94,53 +72,88 @@ def login_required(fn):
     @wraps(fn)
     def wrapped(*args: Any, **kwargs: Any):
         if not session.get("authenticated"):
-            return redirect(url_for("login", next=request.path))
+            return redirect(url_for("login"))
         return fn(*args, **kwargs)
     return wrapped
 
 
-BASE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} · BountyDeck</title><style>
-:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#9da7b3;--accent:#58a6ff;--green:#3fb950;--red:#f85149}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}header{border-bottom:1px solid var(--line);padding:16px max(20px,calc((100vw - 1100px)/2));display:flex;justify-content:space-between;align-items:center}header a{color:var(--text);text-decoration:none;font-weight:700;font-size:20px}.wrap{max-width:1100px;margin:32px auto;padding:0 20px}.muted{color:var(--muted)}.warning{border:1px solid #9e6a03;background:#2b210b;padding:12px 16px;border-radius:8px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0}.card h2,.card h3{margin-top:0}label{display:block;color:var(--muted);margin:10px 0 4px}input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:6px;background:#0d1117;color:var(--text);font:inherit}textarea{min-height:84px;resize:vertical}button,.button{background:#238636;color:white;border:0;padding:9px 14px;border-radius:6px;font:inherit;cursor:pointer;margin-top:12px}button:hover{background:#2ea043}.danger{background:#8c2828}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}.small{font-size:13px}.inline{display:inline}.inline button{margin:0;padding:5px 9px}.pill{border:1px solid var(--line);padding:2px 8px;border-radius:99px;white-space:nowrap}a{color:var(--accent)}.empty{color:var(--muted);padding:12px 0}.login{max-width:420px;margin:10vh auto}.top-actions{display:flex;gap:14px;align-items:center}@media(max-width:600px){table{font-size:13px}th,td{padding:6px}.wrap{margin-top:18px}}
-</style></head><body><header><a href="{{ url_for('index') }}">BountyDeck</a>{% if session.get('authenticated') %}<div class="top-actions"><span class="muted small">Authorized assessment workspace</span><form class="inline" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Sign out</button></form></div>{% endif %}</header><main class="wrap">{{ content|safe }}</main></body></html>"""
+def field(name: str, limit: int, required: bool = False) -> str:
+    value = request.form.get(name, "").strip()
+    if len(value) > limit or (required and not value):
+        abort(400, f"Invalid {name} field.")
+    return value
 
-LOGIN = """<section class="card login"><h1>Sign in</h1><p class="muted">Use the administrator password configured during setup.</p>{% if error %}<p role="alert">{{ error }}</p>{% endif %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="password">Password</label><input id="password" name="password" type="password" required autofocus><button>Sign in</button></form></section>"""
 
-DASHBOARD = """<h1>Assessment workspace</h1><p class="muted">Organize explicitly authorized programs, manually recorded assets, and findings. BountyDeck does not probe targets or run scanners.</p><div class="warning"><strong>Authorization required:</strong> Add only programs and assets you are permitted to assess. Scope notes are records for your team; they are not a technical authorization check.</div>
-<section class="grid"><div class="card"><h2>New project</h2><form method="post" action="{{ url_for('add_project') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Project / program name</label><input name="name" maxlength="120" required><label>Program policy URL (optional)</label><input name="program_url" type="url" maxlength="500"><label>Authorized domains / scope (one per line)</label><textarea name="authorized_scope" maxlength="5000" required placeholder="example.com&#10;app.example.com"></textarea><label>Authorization notes</label><textarea name="authorization_notes" maxlength="2000" placeholder="Policy reference, dates, exclusions…"></textarea><button>Create project</button></form></div><div class="card"><h2>Record an asset</h2>{% if projects %}<form method="post" action="{{ url_for('add_asset') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Project</label><select name="project_id" required>{% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select><label>Asset (manually collected)</label><input name="value" maxlength="500" required placeholder="hostname, URL, IP, or other identifier"><label>Type</label><select name="kind"><option>Hostname</option><option>URL</option><option>IP address</option><option>Other</option></select><label>Notes</label><textarea name="notes" maxlength="2000"></textarea><button>Save asset</button></form>{% else %}<p class="empty">Create a project first.</p>{% endif %}</div></section>
-<section class="card"><h2>Projects</h2>{% if projects %}{% for p in projects %}<article class="card"><div class="grid"><div><h3>{{ p.name }}</h3>{% if p.program_url %}<p><a href="{{ p.program_url }}" rel="noreferrer noopener" target="_blank">Program policy</a></p>{% endif %}<p><strong>Authorized scope on record</strong></p><pre class="muted">{{ p.authorized_scope }}</pre>{% if p.authorization_notes %}<p class="muted">{{ p.authorization_notes }}</p>{% endif %}<form method="post" action="{{ url_for('delete_item', table='projects', item_id=p.id) }}" onsubmit="return confirm('Delete this project and its recorded assets/findings?')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete project</button></form></div><div><h3>Assets</h3>{% set project_assets = assets|selectattr('project_id','equalto',p.id)|list %}{% if project_assets %}<table><thead><tr><th>Value</th><th>Type</th><th></th></tr></thead><tbody>{% for a in project_assets %}<tr><td>{{ a.value }}{% if a.notes %}<br><span class="muted small">{{ a.notes }}</span>{% endif %}</td><td>{{ a.kind }}</td><td><form method="post" action="{{ url_for('delete_item', table='assets', item_id=a.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete</button></form></td></tr>{% endfor %}</tbody></table>{% else %}<p class="empty">No assets recorded.</p>{% endif %}</div><div><h3>Findings</h3>{% set project_findings = findings|selectattr('project_id','equalto',p.id)|list %}{% if project_findings %}<table><thead><tr><th>Finding</th><th>Severity / status</th><th></th></tr></thead><tbody>{% for f in project_findings %}<tr><td><strong>{{ f.title }}</strong>{% if f.details %}<br><span class="muted small">{{ f.details }}</span>{% endif %}</td><td>{{ f.severity }} / {{ f.status }}</td><td><form method="post" action="{{ url_for('delete_item', table='findings', item_id=f.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Delete</button></form></td></tr>{% endfor %}</tbody></table>{% else %}<p class="empty">No findings recorded.</p>{% endif %}<details><summary>Record finding</summary><form method="post" action="{{ url_for('add_finding') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="project_id" value="{{ p.id }}"><label>Title</label><input name="title" maxlength="180" required><label>Severity</label><select name="severity"><option>Informational</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select><label>Status</label><select name="status"><option>Open</option><option>Triaged</option><option>Reported</option><option>Resolved</option><option>Informative</option></select><label>Details / evidence notes</label><textarea name="details" maxlength="5000"></textarea><button>Save finding</button></form></details></div></div></article>{% endfor %}{% else %}<p class="empty">No projects yet. Create one to start organizing an authorized assessment.</p>{% endif %}</section>
-<section class="card"><h2>Tool integrations</h2><p>Tool installation, updates, and scan execution are not enabled in this deployment. This version is a locally/VPS-hosted program, asset, and findings manager; it does not invoke Subfinder, Amass, Nmap, ffuf, Nuclei, or other network-scanning tools.</p><p class="muted">This avoids turning an unverified scope note into an automated scanner authorization. Use each tool only under its own documented authorization and scope controls.</p></section>"""
+def int_field(name: str) -> int:
+    try:
+        return int(request.form.get(name, ""))
+    except ValueError:
+        abort(400, f"Invalid {name}.")
+
+
+def safe_http_url(value: str) -> str:
+    """Only http(s) URLs may be stored; blocks javascript:/data: links."""
+    if not value:
+        return ""
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        abort(400, "Program policy URL must start with http:// or https://")
+    return value
+
+
+def slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "project"
 
 
 @app.context_processor
 def inject_helpers():
-    return {"csrf_token": csrf_token}
+    return {"csrf_token": csrf_token, "version": VERSION}
 
 
-def page(title: str, content_template: str, **context: Any):
-    content = render_template_string(content_template, **context)
-    return render_template_string(BASE, title=title, content=content)
+@app.template_filter("ts")
+def format_ts(value: float | None) -> str:
+    if not value:
+        return "never"
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(value))
 
+
+def client_ip() -> str:
+    return request.remote_addr or "unknown"
+
+
+def login_is_locked(db: sqlite3.Connection, ip: str) -> bool:
+    cutoff = time.time() - LOGIN_WINDOW_SECONDS
+    db.execute("DELETE FROM login_failures WHERE ts < ?", (cutoff,))
+    count = db.execute("SELECT COUNT(*) FROM login_failures WHERE ip=? AND ts>=?", (ip, cutoff)).fetchone()[0]
+    return count >= LOGIN_MAX_FAILURES
+
+
+# --------------------------------------------------------------------------- auth
 
 @app.get("/login")
 def login():
     if session.get("authenticated"):
         return redirect(url_for("index"))
-    return page("Sign in", LOGIN, error="")
+    return render_template("login.html", title="Sign in", error="")
 
 
 @app.post("/login")
 def login_post():
     require_csrf()
-    supplied = request.form.get("password", "")
-    if hmac.compare_digest(supplied.encode(), ADMIN_PASSWORD.encode()):
-        session.clear()
-        session["authenticated"] = True
-        session["csrf_token"] = secrets.token_urlsafe(32)
-        return redirect(url_for("index"))
-    return page("Sign in", LOGIN, error="Incorrect password."), 401
+    ip = client_ip()
+    with connect() as db:
+        if login_is_locked(db, ip):
+            return render_template("login.html", title="Sign in",
+                                   error="Too many failed attempts. Try again in 15 minutes."), 429
+        supplied = request.form.get("password", "")
+        if hmac.compare_digest(supplied.encode(), ADMIN_PASSWORD.encode()):
+            db.execute("DELETE FROM login_failures WHERE ip=?", (ip,))
+            session.clear()
+            session["authenticated"] = True
+            session["csrf_token"] = secrets.token_urlsafe(32)
+            return redirect(url_for("index"))
+        db.execute("INSERT INTO login_failures(ip, ts) VALUES(?,?)", (ip, time.time()))
+    return render_template("login.html", title="Sign in", error="Incorrect password."), 401
 
 
 @app.post("/logout")
@@ -151,6 +164,18 @@ def logout():
     return redirect(url_for("login"))
 
 
+# --------------------------------------------------------------------------- workspace
+
+def annotate_assets(assets: list[sqlite3.Row], projects: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    scopes = {p["id"]: p["authorized_scope"] for p in projects}
+    out = []
+    for a in assets:
+        row = dict(a)
+        row["scope_status"] = check_scope(a["value"], scopes.get(a["project_id"], ""))
+        out.append(row)
+    return out
+
+
 @app.get("/")
 @login_required
 def index():
@@ -158,23 +183,27 @@ def index():
         projects = db.execute("SELECT * FROM projects ORDER BY id DESC").fetchall()
         assets = db.execute("SELECT * FROM assets ORDER BY id DESC").fetchall()
         findings = db.execute("SELECT * FROM findings ORDER BY id DESC").fetchall()
-    return page("Workspace", DASHBOARD, projects=projects, assets=assets, findings=findings)
-
-
-def field(name: str, limit: int, required: bool = False) -> str:
-    value = request.form.get(name, "").strip()
-    if len(value) > limit or (required and not value):
-        abort(400, f"Invalid {name} field.")
-    return value
+        runs = db.execute("SELECT * FROM hunt_runs ORDER BY id DESC LIMIT 200").fetchall()
+    runs_by_project: dict[int, list[Any]] = {}
+    for run in runs:
+        bucket = runs_by_project.setdefault(run["project_id"], [])
+        if len(bucket) < 3:
+            bucket.append(run)
+    return render_template("dashboard.html", title="Workspace", projects=projects,
+                           assets=annotate_assets(assets, projects), findings=findings,
+                           runs=runs_by_project, schedule_choices=SCHEDULE_CHOICES,
+                           kinds=ASSET_KINDS, severities=SEVERITIES, statuses=STATUSES)
 
 
 @app.post("/projects")
 @login_required
 def add_project():
     require_csrf()
+    values = (field("name", 120, True), safe_http_url(field("program_url", 500)),
+              field("authorized_scope", 5000, True), field("authorization_notes", 2000))
     with connect() as db:
-        db.execute("INSERT INTO projects(name, program_url, authorized_scope, authorization_notes) VALUES(?,?,?,?)", (
-            field("name", 120, True), field("program_url", 500), field("authorized_scope", 5000, True), field("authorization_notes", 2000)))
+        db.execute("INSERT INTO projects(name, program_url, authorized_scope, authorization_notes) "
+                   "VALUES(?,?,?,?)", values)
     return redirect(url_for("index"))
 
 
@@ -182,17 +211,20 @@ def add_project():
 @login_required
 def add_asset():
     require_csrf()
-    try:
-        project_id = int(request.form.get("project_id", ""))
-    except ValueError:
-        abort(400, "Invalid project.")
+    project_id = int_field("project_id")
     kind = field("kind", 30, True)
-    if kind not in {"Hostname", "URL", "IP address", "Other"}:
+    if kind not in ASSET_KINDS:
         abort(400, "Invalid asset type.")
+    value, notes = field("value", 500, True), field("notes", 2000)
     with connect() as db:
-        if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+        project = db.execute("SELECT authorized_scope FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
             abort(400, "Unknown project.")
-        db.execute("INSERT INTO assets(project_id,value,kind,notes) VALUES(?,?,?,?)", (project_id, field("value", 500, True), kind, field("notes", 2000)))
+        db.execute("INSERT INTO assets(project_id,value,kind,notes) VALUES(?,?,?,?)",
+                   (project_id, value, kind, notes))
+    if check_scope(value, project["authorized_scope"]) == OUT_OF_SCOPE:
+        flash(f"Saved, but “{value}” does not match this project's scope rules. "
+              "Double-check the program policy before testing it.", "warning")
     return redirect(url_for("index"))
 
 
@@ -200,17 +232,36 @@ def add_asset():
 @login_required
 def add_finding():
     require_csrf()
-    try:
-        project_id = int(request.form.get("project_id", ""))
-    except ValueError:
-        abort(400, "Invalid project.")
+    project_id = int_field("project_id")
     severity, status = field("severity", 20, True), field("status", 20, True)
-    if severity not in {"Informational", "Low", "Medium", "High", "Critical"} or status not in {"Open", "Triaged", "Reported", "Resolved", "Informative"}:
+    if severity not in SEVERITIES or status not in STATUSES:
         abort(400, "Invalid severity or status.")
+    values = (field("title", 180, True), field("details", 5000))
     with connect() as db:
         if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
             abort(400, "Unknown project.")
-        db.execute("INSERT INTO findings(project_id,title,severity,status,details) VALUES(?,?,?,?,?)", (project_id, field("title", 180, True), severity, status, field("details", 5000)))
+        db.execute("INSERT INTO findings(project_id,title,severity,status,details) VALUES(?,?,?,?,?)",
+                   (project_id, values[0], severity, status, values[1]))
+    return redirect(url_for("index"))
+
+
+@app.post("/findings/<int:item_id>/status")
+@login_required
+def update_finding_status(item_id: int):
+    require_csrf()
+    status = field("status", 20, True)
+    notes = field("verification_notes", 2000)
+    if status not in STATUSES:
+        abort(400, "Invalid status.")
+    if status in NOTE_REQUIRED_STATUSES and len(notes) < 10:
+        abort(400, f"Add a note (10+ characters) explaining how this was confirmed before marking it {status}.")
+    with connect() as db:
+        if notes:
+            cur = db.execute("UPDATE findings SET status=?, verification_notes=? WHERE id=?", (status, notes, item_id))
+        else:
+            cur = db.execute("UPDATE findings SET status=? WHERE id=?", (status, item_id))
+        if cur.rowcount == 0:
+            abort(404)
     return redirect(url_for("index"))
 
 
@@ -221,18 +272,165 @@ def delete_item(table: str, item_id: int):
     if table not in {"projects", "assets", "findings"}:
         abort(404)
     with connect() as db:
-        db.execute(f"DELETE FROM {table} WHERE id=?", (item_id,))
+        db.execute(f"DELETE FROM {table} WHERE id=?", (item_id,))  # table is allow-listed above
     return redirect(url_for("index"))
 
+
+# --------------------------------------------------------------------------- automation
+
+SCHEDULE_CHOICES = (6, 12, 24, 72, 168)
+
+
+@app.post("/projects/<int:project_id>/automation")
+@login_required
+def set_automation(project_id: int):
+    require_csrf()
+    action = field("action", 10, True)
+    with connect() as db:
+        if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            abort(404)
+        if action == "disable":
+            db.execute("UPDATE projects SET automation_enabled=0, run_requested=0 WHERE id=?", (project_id,))
+            flash("Automation disabled. A run in progress will stop at its next stage.", "info")
+        elif action == "enable":
+            if request.form.get("acknowledge") != "yes":
+                abort(400, "Confirm that the program permits automated scanning before enabling automation.")
+            try:
+                hours = int(request.form.get("schedule_hours", ""))
+            except ValueError:
+                abort(400, "Invalid schedule.")
+            if hours not in SCHEDULE_CHOICES:
+                abort(400, "Invalid schedule.")
+            db.execute("UPDATE projects SET automation_enabled=1, automation_ack_at=?, schedule_hours=? WHERE id=?",
+                       (time.time(), hours, project_id))
+            flash("Automation enabled. The hunter service picks it up within a minute "
+                  "(start it with: docker compose --profile hunter up -d).", "info")
+        else:
+            abort(400, "Invalid action.")
+    return redirect(url_for("index"))
+
+
+@app.post("/projects/<int:project_id>/run-now")
+@login_required
+def run_now(project_id: int):
+    require_csrf()
+    with connect() as db:
+        cur = db.execute("UPDATE projects SET run_requested=1 WHERE id=? AND automation_enabled=1", (project_id,))
+        if cur.rowcount == 0:
+            abort(400, "Enable automation for this project first.")
+    flash("Run queued.", "info")
+    return redirect(url_for("index"))
+
+
+# --------------------------------------------------------------------------- export
+
+def project_export(project_id: int) -> dict[str, Any]:
+    with connect() as db:
+        project = db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            abort(404)
+        assets = db.execute("SELECT * FROM assets WHERE project_id=? ORDER BY id", (project_id,)).fetchall()
+        findings = db.execute("SELECT * FROM findings WHERE project_id=? ORDER BY id", (project_id,)).fetchall()
+    return {
+        "project": dict(project),
+        "assets": [dict(a, scope_status=check_scope(a["value"], project["authorized_scope"])) for a in assets],
+        "findings": [dict(f) for f in findings],
+    }
+
+
+def render_markdown(data: dict[str, Any], verified_only: bool = False) -> str:
+    p = data["project"]
+    if verified_only:
+        data = dict(data, findings=[f for f in data["findings"] if f["status"] in REPORTABLE_STATUSES])
+    lines = [f"# {p['name']}", ""]
+    if p["program_url"]:
+        lines += [f"Program policy: {p['program_url']}", ""]
+    lines += ["## Scope on record", "", "```", p["authorized_scope"], "```", ""]
+    if p["authorization_notes"]:
+        lines += ["## Authorization notes", "", p["authorization_notes"], ""]
+    lines += ["## Assets", ""]
+    if data["assets"]:
+        lines += ["| Asset | Type | Scope | Notes |", "|---|---|---|---|"]
+        for a in data["assets"]:
+            notes = a["notes"].replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| {a['value'].replace('|', '\\|')} | {a['kind']} | {a['scope_status']} | {notes} |")
+    else:
+        lines.append("_None recorded._")
+    lines += ["", "## Findings", ""]
+    if data["findings"]:
+        for f in data["findings"]:
+            lines += [f"### {f['title']}", "", f"- Severity: {f['severity']}", f"- Status: {f['status']}", ""]
+            if f["details"]:
+                lines += [f["details"], ""]
+            if f.get("verification_notes"):
+                lines += ["**Verification:**", "", f["verification_notes"], ""]
+    else:
+        lines.append("_None recorded._")
+    return "\n".join(lines) + "\n"
+
+
+@app.get("/projects/<int:project_id>/export.<fmt>")
+@login_required
+def export_project(project_id: int, fmt: str):
+    data = project_export(project_id)
+    slug = slugify(data["project"]["name"])
+    if fmt == "json":
+        body, mime = json.dumps(data, indent=2), "application/json"
+    elif fmt == "md":
+        body, mime = render_markdown(data, request.args.get("verified") == "1"), "text/markdown"
+    else:
+        abort(404)
+    return Response(body, mimetype=mime,
+                    headers={"Content-Disposition": f'attachment; filename="{slug}.{fmt}"'})
+
+
+# --------------------------------------------------------------------------- updates
+
+def fetch_latest_commit() -> dict[str, str]:
+    """Ask GitHub for the newest commit on the update branch. Raises on any failure."""
+    url = f"https://api.github.com/repos/{UPDATE_REPO}/commits/{UPDATE_BRANCH}"
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                               "User-Agent": "BountyDeck-update-check"})
+    with urllib.request.urlopen(req, timeout=6) as resp:  # noqa: S310 - fixed https URL
+        data = json.load(resp)
+    return {"sha": data["sha"], "message": data["commit"]["message"].splitlines()[0],
+            "date": data["commit"]["committer"]["date"]}
+
+
+@app.get("/update")
+@login_required
+def update_page():
+    return render_template("update.html", title="Updates", repo=UPDATE_REPO, branch=UPDATE_BRANCH, result=None)
+
+
+@app.post("/update/check")
+@login_required
+def update_check():
+    require_csrf()
+    result: dict[str, Any]
+    try:
+        latest = fetch_latest_commit()
+        current = VERSION
+        up_to_date = current != "dev" and latest["sha"].startswith(current) or latest["sha"] == current
+        result = {"ok": True, "latest": latest, "up_to_date": up_to_date, "dev_build": current == "dev"}
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, OSError) as exc:
+        result = {"ok": False, "error": f"Could not reach GitHub: {exc}"}
+    return render_template("update.html", title="Updates", repo=UPDATE_REPO, branch=UPDATE_BRANCH, result=result)
+
+
+# --------------------------------------------------------------------------- headers
 
 @app.after_request
 def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'"
+    response.headers["Cache-Control"] = "no-store" if session.get("authenticated") else response.headers.get("Cache-Control", "no-cache")
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self'; form-action 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'")
     return response
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="127.0.0.1", port=8000)

@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Go is pinned to a known release; individual tools use explicit versions below.
 ARG GO_VERSION=1.23.6
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
+ARG TARGETARCH=amd64
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
 
 ARG SUBFINDER=v2.8.0
@@ -39,11 +40,25 @@ RUN /usr/local/go/bin/go install -ldflags="-s -w" github.com/projectdiscovery/su
     && /usr/local/go/bin/go install -ldflags="-s -w" github.com/tomnomnom/waybackurls@${WAYBACKURLS} \
     && /usr/local/go/bin/go install -ldflags="-s -w" github.com/sensepost/gowitness@${GOWITNESS}
 
+# Extra recon helpers for manual use (also in reNgine's toolset). Not run by the hunter service.
+# Unpinned: check upstream release notes before relying on a new build.
+RUN /usr/local/go/bin/go install -ldflags="-s -w" github.com/projectdiscovery/tlsx/cmd/tlsx@latest \
+    && /usr/local/go/bin/go install -ldflags="-s -w" github.com/hakluke/hakrawler@latest \
+    && /usr/local/go/bin/go install -ldflags="-s -w" github.com/jaeles-project/gospider@latest
+
+RUN python3 -m venv /opt/wafw00f && /opt/wafw00f/bin/pip install --no-cache-dir wafw00f
+
 RUN python3 -m venv /opt/dirsearch && /opt/dirsearch/bin/pip install --no-cache-dir dirsearch
 
 COPY tools/tool-registry.json /opt/bountydeck/tool-registry.json
 COPY tools/entrypoint-tools.sh /usr/local/bin/bountydeck-tools
 RUN chmod 0755 /usr/local/bin/bountydeck-tools
+
+# Scheduled-hunting service (compose profile "hunter"). It runs as an unprivileged user and shares
+# only the SQLite data volume with the web app.
+RUN useradd --system --uid 10001 --create-home bountydeck \
+    && mkdir -p /data /app && chown -R bountydeck:bountydeck /data /home/bountydeck
+COPY hunter.py db.py scope.py /app/
 
 VOLUME ["/opt/bountydeck/tools", "/root/.config", "/root/.cache"]
 ENTRYPOINT ["/usr/local/bin/bountydeck-tools"]
