@@ -6,7 +6,7 @@ BountyDeck is a self-hostable workspace for authorized bug-bounty program, asset
 
 - Programs, scope rules, assets and findings in one place, with Markdown/JSON export per project.
 - **Scope matching in code.** Rules like `example.com`, `*.example.com`, CIDR ranges and `!excluded.example.com` (exclusions always win). Recorded assets show an in-scope / out-of-scope badge.
-- **Scheduled hunting** (opt-in per project): while you are away, a separate `hunter` service discovers subdomains for your wildcard rules (subfinder), probes live hosts (httpx) and runs low-impact nuclei templates, then drops the results into your workspace as **Unverified** findings. New in-scope assets and findings can ping a Discord/Slack webhook.
+- **Scheduled hunting** (opt-in per project): while you are away, a separate `hunter` service discovers subdomains for your wildcard rules (subfinder plus the passive sources assetfinder, gau and waybackurls, then dnsx to drop names that do not resolve), probes live hosts (httpx) and runs low-impact nuclei templates, then drops the results into your workspace as **Unverified** findings. New in-scope assets and findings can ping a Discord/Slack webhook.
 - Finding workflow statuses including *Unverified*, *Verified* and *False positive*. Marking a finding Verified or False positive requires a note on how you confirmed it, and a **verified-only report** export leaves everything else out.
 - Login lockout after repeated failures, strict CSP, CSRF protection.
 - In-app **Updates** page that checks GitHub for a newer commit; `./update.sh` applies it in one command.
@@ -17,9 +17,9 @@ BountyDeck distinguishes between a scope record and authorization to test. The s
 
 - Automation is **off by default**. Enabling it for a project requires ticking that the program's policy permits automated scanning. Disabling it stops a run in progress at its next stage.
 - Every host is matched against the project's scope before it is passed to any tool, including hosts a tool discovered itself. Out-of-scope results are dropped and logged.
-- Only subfinder, httpx and nuclei run, with fixed arguments (no shell), a request-rate cap (`BOUNTYDECK_HUNT_RATE`, default 10/s), and intrusive/DoS/fuzzing/brute-force nuclei templates excluded. Nuclei out-of-band (interactsh) callbacks are disabled.
+- Only passive discovery (subfinder, assetfinder, gau, waybackurls), DNS resolution (dnsx), httpx and nuclei run, with fixed arguments (no shell), a request-rate cap (`BOUNTYDECK_HUNT_RATE`, default 10/s), and intrusive/DoS/fuzzing/brute-force nuclei templates excluded. Nuclei out-of-band (interactsh) callbacks are disabled.
 - Scanner output is frequently a false positive. Hunter results are stored as *Unverified*; reproduce each one by hand before reporting.
-- Heavier tools (ffuf, naabu, nmap, dirsearch) are in the tools image for manual use but are never run automatically.
+- Active tools (crawlers, port scanners, fuzzers, directory brute-forcers such as katana, naabu, nmap, ffuf, dirsearch) are in the tools image for manual use but are never run automatically.
 
 ## Requirements
 

@@ -3,7 +3,9 @@
 Runs as a separate container (compose profile "hunter"). For every project that
 you have explicitly enabled automation on, it periodically:
 
-  1. discovers subdomains of the project's wildcard scope rules   (subfinder)
+  1. discovers subdomains of the project's wildcard scope rules   (subfinder, plus the passive
+     sources assetfinder / gau / waybackurls, which only read public datasets and never contact
+     the target; dnsx then resolves the new hosts via DNS)
   2. probes in-scope hosts for live web servers                   (httpx)
   3. runs low-impact vulnerability templates against live URLs    (nuclei)
 
@@ -15,7 +17,7 @@ Guardrails, all enforced here in code and not only in the UI:
   * Every host is matched against the project's scope rules (scope.check_scope,
     "!" exclusions win) before it is handed to ANY tool, including hosts that a
     tool discovered itself. Anything out of scope is dropped and logged.
-  * Only subfinder, httpx and nuclei are ever run, with fixed argument lists (no
+  * Only the tools in ALLOWED_TOOLS are ever run (passive discovery, DNS resolution, HTTP probing and nuclei), with fixed argument lists (no
     shell), a request-rate cap, and intrusive nuclei templates excluded.
   * Results are stored as status "Unverified". Scanner output is frequently a false
     positive: confirm each one by hand before reporting it.
@@ -52,6 +54,9 @@ NUCLEI_EXCLUDE_TAGS = "dos,fuzz,intrusive,bruteforce,brute-force"
 SEVERITY_MAP = {"info": "Informational", "low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
 # Nuclei "info" templates are mostly fingerprinting noise; hunt medium and above.
 NUCLEI_SEVERITIES = "medium,high,critical"
+
+# Active crawlers, port scanners, fuzzers and brute-forcers are deliberately NOT in this list.
+ALLOWED_TOOLS = ("subfinder", "assetfinder", "gau", "waybackurls", "dnsx", "httpx", "nuclei")
 
 _stop = False
 
@@ -112,7 +117,7 @@ def keep_in_scope(candidates: Iterable[str], scope_text: str, logf, what: str) -
 
 def run_tool(argv: list[str], stdin_text: str = "") -> list[str]:
     """Run one allow-listed tool without a shell and return its stdout lines."""
-    if argv[0] not in ("subfinder", "httpx", "nuclei"):
+    if argv[0] not in ALLOWED_TOOLS:
         raise ToolError(f"tool not allowed: {argv[0]}")
     if shutil.which(argv[0]) is None:
         raise ToolError(f"{argv[0]} is not installed in this container")
@@ -127,12 +132,36 @@ def run_tool(argv: list[str], stdin_text: str = "") -> list[str]:
     return proc.stdout.splitlines()[:50000]
 
 
-def discover_subdomains(roots: list[str], scope_text: str, logf) -> list[str]:
+def _optional(argv: list[str], stdin_text: str, logf) -> list[str]:
+    """Run a supplementary passive source; a missing or failing source must not fail the run."""
+    try:
+        return run_tool(argv, stdin_text)
+    except ToolError as exc:
+        logf(f"{argv[0]} skipped: {exc}")
+        return []
+
+
+def discover_subdomains(roots: list[str], scope_text: str, logf, checkpoint=lambda: None) -> list[str]:
     found: list[str] = []
     for root in roots:
-        if root and valid_target(root):
-            lines = run_tool(["subfinder", "-d", root, "-silent"])
-            found += keep_in_scope(lines, scope_text, logf, f"subfinder {root}")
+        if not (root and valid_target(root)):
+            continue
+        checkpoint()
+        candidates = run_tool(["subfinder", "-d", root, "-silent"])                      # required source
+        checkpoint()
+        candidates += _optional(["assetfinder", "--subs-only", root], "", logf)          # passive
+        checkpoint()
+        candidates += _optional(["gau", "--subs", root], "", logf)                       # passive, URLs
+        checkpoint()
+        candidates += _optional(["waybackurls"], root + "\n", logf)                      # passive, URLs
+        for host in keep_in_scope(candidates, scope_text, logf, f"discovery {root}"):
+            if host not in found:
+                found.append(host)
+    if found:  # drop names that do not resolve (DNS lookups only)
+        checkpoint()
+        resolved = _optional(["dnsx", "-silent", "-rl", RATE_LIMIT], "\n".join(found) + "\n", logf)
+        if resolved:
+            found = keep_in_scope(resolved, scope_text, logf, "dnsx")
     return found
 
 
@@ -263,8 +292,8 @@ def run_project(project_id: int) -> None:
     try:
         checkpoint()
         roots = wildcard_roots(scope_text)
-        discovered = discover_subdomains(roots, scope_text, logf) if roots else []
-        added = save_assets(project_id, discovered[:MAX_TARGETS], "subfinder") if discovered else 0
+        discovered = discover_subdomains(roots, scope_text, logf, checkpoint) if roots else []
+        added = save_assets(project_id, discovered[:MAX_TARGETS], "passive discovery") if discovered else 0
         logf(f"discovery: {len(discovered)} in-scope hosts, {added} new assets")
 
         checkpoint()

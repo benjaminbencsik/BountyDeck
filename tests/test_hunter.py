@@ -22,6 +22,14 @@ class FakeTools:
         self.calls.append((argv, stdin_text))
         if argv[0] == "subfinder":
             return ["www.example.com", "admin.example.com", "evil.net", "-oX", "api.example.com"]
+        if argv[0] == "assetfinder":
+            return ["staging.example.com", "evil.net"]
+        if argv[0] == "gau":
+            return ["https://old.example.com/a?x=1", "https://evil.net/b"]
+        if argv[0] == "waybackurls":
+            return ["http://admin.example.com/x", "http://legacy.example.com/"]
+        if argv[0] == "dnsx":
+            return [h for h in stdin_text.split() if h != "legacy.example.com"]   # one name does not resolve
         if argv[0] == "httpx":
             return [json.dumps({"url": f"https://{h}"}) for h in stdin_text.split()] + [json.dumps({"url": "https://evil.net"})]
         if argv[0] == "nuclei":
@@ -49,7 +57,30 @@ def test_only_in_scope_hosts_reach_tools(hunter_module, monkeypatch):
         statuses = {r["status"] for r in conn.execute("SELECT status FROM findings")}
         assets = {r["value"] for r in conn.execute("SELECT value FROM assets")}
     assert titles == ["Name t1 (t1)"] and statuses == {"Unverified"}
-    assert assets == {"www.example.com", "api.example.com"}
+    assert assets == {"www.example.com", "api.example.com", "staging.example.com", "old.example.com"}
+
+
+def test_passive_source_failure_does_not_fail_run(hunter_module, monkeypatch):
+    import db
+    make_project(db)
+    fake = FakeTools()
+
+    def flaky(argv, stdin_text=""):
+        if argv[0] in ("assetfinder", "gau", "waybackurls", "dnsx"):
+            raise hunter_module.ToolError(f"{argv[0]} is not installed in this container")
+        return fake(argv, stdin_text)
+
+    monkeypatch.setattr(hunter_module, "run_tool", flaky)
+    hunter_module.run_project(1)
+    with db.connect() as conn:
+        assert conn.execute("SELECT status FROM hunt_runs").fetchone()["status"] == "completed"
+        assert {r["value"] for r in conn.execute("SELECT value FROM assets")} == {"www.example.com", "api.example.com"}
+
+
+def test_active_tools_are_not_allowed(hunter_module):
+    for tool in ("katana", "naabu", "nmap", "ffuf", "dirsearch", "gowitness", "amass"):
+        with pytest.raises(hunter_module.ToolError):
+            hunter_module.run_tool([tool, "example.com"])
 
 
 def test_findings_are_deduplicated_across_runs(hunter_module, monkeypatch):
