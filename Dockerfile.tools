@@ -40,6 +40,14 @@ RUN /usr/local/go/bin/go install -ldflags="-s -w" github.com/projectdiscovery/su
     && /usr/local/go/bin/go install -ldflags="-s -w" github.com/tomnomnom/waybackurls@${WAYBACKURLS} \
     && /usr/local/go/bin/go install -ldflags="-s -w" github.com/sensepost/gowitness@${GOWITNESS}
 
+# Extra recon helpers for manual use (also in reNgine's toolset). Not run by the hunter service.
+# Unpinned: check upstream release notes before relying on a new build.
+RUN /usr/local/go/bin/go install -ldflags="-s -w" github.com/projectdiscovery/tlsx/cmd/tlsx@latest \
+    && /usr/local/go/bin/go install -ldflags="-s -w" github.com/hakluke/hakrawler@latest \
+    && /usr/local/go/bin/go install -ldflags="-s -w" github.com/jaeles-project/gospider@latest
+
+RUN python3 -m venv /opt/wafw00f && /opt/wafw00f/bin/pip install --no-cache-dir wafw00f
+
 RUN python3 -m venv /opt/dirsearch && /opt/dirsearch/bin/pip install --no-cache-dir dirsearch
 
 COPY tools/tool-registry.json /opt/bountydeck/tool-registry.json

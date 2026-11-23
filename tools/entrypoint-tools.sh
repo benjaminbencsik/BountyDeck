@@ -7,9 +7,10 @@ mkdir -p "$TOOLS_DIR/bin"
 
 case "$MODE" in
   install|update)
-    cp -a /usr/local/bin/{subfinder,dnsx,httpx,naabu,katana,nuclei,amass,assetfinder,gau,waybackurls,gowitness} "$TOOLS_DIR/bin/" 2>/dev/null || true
+    cp -a /usr/local/bin/{subfinder,dnsx,httpx,naabu,katana,nuclei,amass,assetfinder,gau,waybackurls,gowitness,tlsx,hakrawler,gospider} "$TOOLS_DIR/bin/" 2>/dev/null || true
     cp -a /usr/bin/{nmap,whois,dig,ffuf} "$TOOLS_DIR/bin/" 2>/dev/null || true
     ln -sfn /opt/dirsearch/bin/dirsearch "$TOOLS_DIR/bin/dirsearch"
+    ln -sfn /opt/wafw00f/bin/wafw00f "$TOOLS_DIR/bin/wafw00f"
 
     if [[ "$MODE" == "update" ]]; then
       export GOBIN="$TOOLS_DIR/bin"
@@ -24,6 +25,10 @@ case "$MODE" in
       /usr/local/go/bin/go install -ldflags="-s -w" github.com/lc/gau/v2/cmd/gau@latest
       /usr/local/go/bin/go install -ldflags="-s -w" github.com/tomnomnom/waybackurls@latest
       /usr/local/go/bin/go install -ldflags="-s -w" github.com/sensepost/gowitness@latest
+      /usr/local/go/bin/go install -ldflags="-s -w" github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+      /usr/local/go/bin/go install -ldflags="-s -w" github.com/hakluke/hakrawler@latest
+      /usr/local/go/bin/go install -ldflags="-s -w" github.com/jaeles-project/gospider@latest
+      /opt/wafw00f/bin/pip install --upgrade --no-cache-dir wafw00f
       /opt/dirsearch/bin/pip install --upgrade --no-cache-dir dirsearch
     fi
 

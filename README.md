@@ -76,6 +76,7 @@ The initial Docker tool image includes these scanners and helpers:
 - FFUF and Dirsearch
 - Nuclei plus downloaded templates
 - Gowitness
+- TLSx, Hakrawler, GoSpider, wafw00f (manual use; the hunter service never runs these)
 
 See `tools/tool-registry.json` for categories and risk labels. The image pins reviewed tool versions for reproducible first installs. Tool binaries and templates are kept in the persistent Docker volume `bountydeck-tools`; the web container cannot alter or execute them because the mount is read-only.
 
